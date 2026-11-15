@@ -15,6 +15,9 @@
 #include <string.h>
 #include <malloc.h>
 #include <elf.h>
+#ifdef __SWITCH2__
+#include <kaihen.h>
+#endif
 
 #include "config.h"
 #include "so_util.h"
@@ -32,6 +35,38 @@
 #define DT_ANDROID_RELRENT 0x6fffe003
 
 static so_module *so_list = NULL;
+
+#ifdef __SWITCH2__
+extern Result __nx_jit_map_code(void *rx_addr, void *src_addr, size_t size);
+
+static Result so_map_image_switch2(so_module *mod, const uint8_t *is_x_page) {
+  boot_checkpoint("checkpoint: S2 image mapping started");
+  const size_t pages = mod->load_size / 0x1000;
+  for (size_t pg = 0; pg < pages; ) {
+    const uint8_t executable = is_x_page[pg];
+    size_t end = pg + 1;
+    while (end < pages && is_x_page[end] == executable) end++;
+    void *dst = (uint8_t *)mod->load_virtbase + pg * 0x1000;
+    void *src = (uint8_t *)mod->load_base + pg * 0x1000;
+    const size_t size = (end - pg) * 0x1000;
+    const Result rc = executable ? __nx_jit_map_code(dst, src, size)
+                                 : svcMapMemory(dst, src, size);
+    if (R_FAILED(rc)) {
+      printf("[so] %s: %s map failed dst=%p src=%p size=0x%zx rc=%08x\n",
+             mod->name, executable ? "ldr:ro RX" : "svcMapMemory RW",
+             dst, src, size, rc);
+      return rc;
+    }
+    char checkpoint[128];
+    snprintf(checkpoint, sizeof checkpoint,
+             "checkpoint: S2 %s map complete (%p, 0x%zx)",
+             executable ? "RX" : "RW", dst, size);
+    boot_checkpoint(checkpoint);
+    pg = end;
+  }
+  return 0;
+}
+#endif
 
 void hook_arm64(uintptr_t addr, uintptr_t dst) {
   if (addr == 0)
@@ -54,10 +89,11 @@ void so_free_temp(so_module *mod) {
 
 void so_finalize(so_module *mod) {
   Result rc = 0;
-
+#ifndef __SWITCH2__
   // map the entire thing as code memory
   rc = svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64)mod->load_virtbase, (u64)mod->load_base, mod->load_size);
   if (R_FAILED(rc)) fatal_error("Error: svcMapProcessCodeMemory failed:\n%08x", rc);
+#endif
 
   // the kernel never allows W -> X transitions on code memory, so the RX
   // segments must be set first, straight from the freshly-mapped state;
@@ -78,6 +114,11 @@ void so_finalize(so_module *mod) {
       is_x_page[pg] = 1;
   }
 
+#ifdef __SWITCH2__
+  rc = so_map_image_switch2(mod, is_x_page);
+  if (R_FAILED(rc))
+    fatal_error("Error: Switch 2 image mapping failed for %s:\n%08x", mod->name, rc);
+#else
   // pass 0 sets the executable runs to RX, pass 1 sets the rest to RW
   for (int want_x = 1; want_x >= 0; want_x--) {
     size_t pg = 0;
@@ -96,16 +137,14 @@ void so_finalize(so_module *mod) {
       pg = run_end;
     }
   }
+#endif
 
   free(is_x_page);
 
   // svcMapProcessCodeMemory donates the source pages (load_base) to the code
-  // mapping; afterwards load_base is in CodeMemory state and faults on access --
-  // the image is readable only via load_virtbase. mod->syms/dynstrtab were set to
-  // load_base for pre-finalize import resolution (when load_virtbase isn't mapped
-  // yet). Rebase them to load_virtbase now so post-finalize lookups (dlsym ->
-  // so_lookup_export, e.g. libunity resolving il2cpp_init) read the live mapped
-  // .dynsym/.dynstr instead of faulting on the donated source range.
+  // mapping on Switch 1. On both systems, post-finalize symbol lookups should
+  // read the mapped image. Before finalization, so_resolve uses load_base;
+  // afterwards mod->syms and mod->dynstrtab are moved to load_virtbase.
   const uintptr_t delta = (uintptr_t)mod->load_virtbase - (uintptr_t)mod->load_base;
   if (mod->syms)      mod->syms      = (Elf64_Sym *)((uintptr_t)mod->syms + delta);
   if (mod->dynstrtab) mod->dynstrtab = (char *)((uintptr_t)mod->dynstrtab + delta);
@@ -177,9 +216,18 @@ int so_load(so_module *mod, const char *filename, void *base, size_t max_size) {
 
   // reserve virtual memory space for the entire LOAD zone
   virtmemLock();
+#ifdef __SWITCH2__
+  mod->load_virtbase = virtmemFindStack(mod->load_size, 0x1000);
+#else
   mod->load_virtbase = virtmemFindCodeMemory(mod->load_size, 0x1000);
-  mod->load_memrv = virtmemAddReservation(mod->load_virtbase, mod->load_size);
+#endif
+  if (mod->load_virtbase)
+    mod->load_memrv = virtmemAddReservation(mod->load_virtbase, mod->load_size);
   virtmemUnlock();
+  if (!mod->load_virtbase || !mod->load_memrv) {
+    res = -2;
+    goto err_free_load;
+  }
 
   // copy segments to where they belong, then fix up the runtime phdrs to
   // point into the virtual address space
@@ -224,9 +272,11 @@ int so_load(so_module *mod, const char *filename, void *base, size_t max_size) {
   return 0;
 
 err_free_load:
-  virtmemLock();
-  virtmemRemoveReservation(mod->load_memrv);
-  virtmemUnlock();
+  if (mod->load_memrv) {
+    virtmemLock();
+    virtmemRemoveReservation(mod->load_memrv);
+    virtmemUnlock();
+  }
 err_free_so:
   free(mod->so_base);
   mod->so_base = NULL;
