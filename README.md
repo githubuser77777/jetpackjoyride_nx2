@@ -105,7 +105,7 @@ by `build.sh`.
 Clone this repository and enter its directory:
 
 ```bash
-git clone https://github.com/githubuser77777/jetpackjoyride_nx.git
+git clone https://github.com/githubuser77777/jetpackjoyride_nx2.git
 cd jetpackjoyride_nx
 ```
 
