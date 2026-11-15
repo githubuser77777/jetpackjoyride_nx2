@@ -3,7 +3,7 @@
 <img src="extras/banner.png" alt="Jetpack Joyride banner" width="35%">
 
 </div>
-<h1 align="center">Jetpack Joyride - Nintendo Switch port</h1>
+<h1 align="center">Jetpack Joyride - Nintendo Switch 2 port</h1>
 
 This is a wrapper/port of the Android ARM64 version of Jetpack Joyride (`1.104.1`). <br/>
 It loads the original game's ARM64 library and runs it as-is inside a minimal Android compatibility environment.
