@@ -139,7 +139,7 @@ cd ounce-devkit
 sh install.sh
 ```
 
-Change back to the `jetpackjoyride_nx` repository folder, then build:
+Change back to the `jetpackjoyride_nx2` repository folder, then build:
 
 ```bash
 ./build.sh clean SWITCH2=1
