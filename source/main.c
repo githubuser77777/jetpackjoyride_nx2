@@ -120,6 +120,12 @@ void __libnx_initheap(void) {
 }
 
 static void check_syscalls(void) {
+#ifdef __SWITCH2__
+  if (!envIsSyscallHinted(0x04) || !envIsSyscallHinted(0x05))
+    fatal_error("Switch 2 requires svcMapMemory/svcUnmapMemory.");
+  if (smGetServiceOverride(smEncodeName("ldr:ro")) == INVALID_HANDLE)
+    fatal_error("Switch 2 code mapping unavailable: launch through kaiHEN hbloader.");
+#else
   if (!envIsSyscallHinted(0x77))
     fatal_error("svcMapProcessCodeMemory is unavailable.");
   if (!envIsSyscallHinted(0x78))
@@ -129,6 +135,7 @@ static void check_syscalls(void) {
   if (envGetOwnProcessHandle() == INVALID_HANDLE)
     fatal_error("The launcher did not provide an own-process handle. Start the "
                 "NRO through a title override, not applet mode.");
+#endif
 }
 
 static int regular_file(const char *path, uint64_t *size) {
@@ -1079,15 +1086,23 @@ static const char *game_language(void) {
 }
 
 int main(int argc, char **argv) {
+  mkdir(DATA_ROOT, 0777);
+  FILE *boot_log = fopen(DATA_ROOT "/boot.log", "w");
+  if (boot_log) { fputs("Jetpack Joyride NX boot log\n", boot_log); fclose(boot_log); }
+  boot_checkpoint("checkpoint: entered main");
+#ifndef __SWITCH2__
   saltynx_start();
   atexit(saltynx_stop);
+#endif
   (void)argc;
   (void)argv;
 
   startup_status_begin("Preparing extracted Android files...");
+  boot_checkpoint("checkpoint: startup display initialized");
   mkdir(DATA_ROOT, 0777);
   if (chdir(DATA_ROOT) != 0) fatal_error("Could not open %s.", DATA_ROOT);
   check_syscalls();
+  boot_checkpoint("checkpoint: syscall checks complete");
 
   make_directory(DATA_ROOT "/assets");
   make_directory(DATA_ROOT "/lib");
@@ -1102,6 +1117,7 @@ int main(int argc, char **argv) {
   check_game_data();
   startup_status_update("Removing unused APK files (first boot)...");
   cleanup_apk_extract();
+  boot_checkpoint("checkpoint: game data validated and cleanup complete");
 
   const char *config_path = DATA_ROOT "/" CONFIG_NAME;
   if (read_config(config_path) != 0) write_config(config_path);
@@ -1117,79 +1133,112 @@ int main(int argc, char **argv) {
 
   startup_status_update("Starting network, audio, and Android services...");
   nx_net_init();
+  boot_checkpoint("checkpoint: network services initialized");
   SDL_SetMainReady();
   if (SDL_Init(SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) < 0)
     fatal_error("SDL_Init failed: %s", SDL_GetError());
+  boot_checkpoint("checkpoint: SDL_Init complete");
 
   startup_status_update("Loading the Halfbrick Mortar engine...");
+  boot_checkpoint("checkpoint: before loading libmortargame.so");
   if (!load_mortar()) fatal_error("Could not map %s.", LIB_MORTAR);
+  boot_checkpoint("checkpoint: libmortargame.so loaded");
   const int unresolved = resolve_imports(&mortar_mod);
   if (unresolved != 0)
     fatal_error("libmortargame.so has %d unresolved native import%s.",
                 unresolved, unresolved == 1 ? "" : "s");
+  boot_checkpoint("checkpoint: imports resolved");
   install_offline_service_patches();
+  boot_checkpoint("checkpoint: offline patches installed");
+  boot_checkpoint("checkpoint: before module finalization");
   so_finalize(&mortar_mod);
   so_flush_caches(&mortar_mod);
+  boot_checkpoint("checkpoint: module finalized and caches flushed");
   static uint8_t main_tls[BIONIC_TLS_SIZE] __attribute__((aligned(16)));
   install_bionic_tls(main_tls);
+  boot_checkpoint("checkpoint: bionic TLS installed");
   so_execute_init_array(&mortar_mod);
+  boot_checkpoint("checkpoint: game constructors complete");
   so_free_temp(&mortar_mod);
 
   startup_status_update("Creating the GLES2 display...");
   startup_status_end();
+  boot_checkpoint("checkpoint: before graphics_init");
   Graphics graphics = {
     .display = EGL_NO_DISPLAY,
     .surface = EGL_NO_SURFACE,
     .context = EGL_NO_CONTEXT,
   };
   graphics_init(&graphics);
+  boot_checkpoint("checkpoint: graphics_init complete");
 
   jni_init();
+  boot_checkpoint("checkpoint: JNI shim initialized");
+  boot_checkpoint("checkpoint: before resolving snapshot-open callback");
+  uintptr_t snapshot_open = mortar_symbol(
+      "Java_com_halfbrick_mortar_"
+      "GooglePlaySnapshotManager_OnSnapshotOpened");
+  boot_checkpoint("checkpoint: snapshot-open callback symbol resolved");
   jni_set_snapshot_opened_callback(
-      (jni_snapshot_opened_fn)mortar_symbol(
-          "Java_com_halfbrick_mortar_"
-          "GooglePlaySnapshotManager_OnSnapshotOpened"));
+      (jni_snapshot_opened_fn)snapshot_open);
+  boot_checkpoint("checkpoint: snapshot-open callback registered");
+  boot_checkpoint("checkpoint: before resolving snapshot-commit callback");
+  uintptr_t snapshot_commit = mortar_symbol(
+      "Java_com_halfbrick_mortar_"
+      "GooglePlaySnapshotManager_OnSnapshotCommitted");
+  boot_checkpoint("checkpoint: snapshot-commit callback symbol resolved");
   jni_set_snapshot_committed_callback(
-      (jni_snapshot_committed_fn)mortar_symbol(
-          "Java_com_halfbrick_mortar_"
-          "GooglePlaySnapshotManager_OnSnapshotCommitted"));
+      (jni_snapshot_committed_fn)snapshot_commit);
+  boot_checkpoint("checkpoint: snapshot-commit callback registered");
   void *env = fake_env;
   void *thiz = jni_make_activity_object();
+  boot_checkpoint("checkpoint: activity object created");
   jni_onload_fn onload =
       (jni_onload_fn)mortar_symbol("JNI_OnLoad");
+  boot_checkpoint("checkpoint: Mortar JNI_OnLoad resolved");
+  boot_checkpoint("checkpoint: before calling Mortar JNI_OnLoad");
   const int jni_version = onload(fake_vm, NULL);
+  boot_checkpoint("checkpoint: Mortar JNI_OnLoad returned");
   if (jni_version != MORTAR_JNI_VERSION)
     fatal_error("Mortar JNI initialization returned 0x%x; expected JNI 1.4 "
                 "(0x%x).", jni_version, MORTAR_JNI_VERSION);
 
   MortarApi api;
   mortar_api_init(&api);
+  boot_checkpoint("checkpoint: Mortar API resolved");
   splash_game_get =
       (splash_game_get_fn)mortar_symbol("_ZN4Game11GetInstanceEv");
   splash_load_content =
       (splash_load_content_fn)mortar_symbol("_ZN4Game15LoadGameContentERi");
   splash_setup_text =
       (splash_setup_text_fn)mortar_symbol("_ZN13SplashScreens9SetupTextEv");
+  boot_checkpoint("checkpoint: game entry points resolved");
   void *source_path = jni_make_string(managed_path(DATA_ROOT "/base.apk"));
   void *save_path = jni_make_string(managed_path(DATA_ROOT "/save/"));
   void *cache_path = jni_make_string(managed_path(DATA_ROOT "/cache/"));
   void *external_path = jni_make_string(managed_path(DATA_ROOT "/external/"));
   void *language = jni_make_string(game_language());
+  boot_checkpoint("checkpoint: game path and locale strings created");
 
   /* Required by Game::WaitConsentManagement. */
   api.set_consent_platform(
       env, thiz,
       jni_make_object("com/halfbrick/mortar/ConsentManagementPlatform"));
+  boot_checkpoint("checkpoint: consent platform initialized");
 
   /* InitFileManager consumes the premade device state. */
   api.init_device_properties(env, thiz);
+  boot_checkpoint("checkpoint: device properties initialized");
   api.init_files(env, thiz, source_path, save_path, cache_path, external_path, 0);
+  boot_checkpoint("checkpoint: game files initialized");
   api.system_init(env, thiz, screen_width, screen_height, language);
+  boot_checkpoint("checkpoint: game system initialized");
   api.set_app_licensed(env, thiz, 1);
   glFrontFace(GL_CCW);
   glDisable(GL_BLEND);
   glDisable(GL_CULL_FACE);
   api.game_init(env, thiz);
+  boot_checkpoint("checkpoint: game_init returned");
   glFrontFace(GL_CCW);
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
@@ -1198,6 +1247,7 @@ int main(int argc, char **argv) {
   api.controller_attach(env, thiz, 0,
                         jni_make_string("Nintendo Switch Controller"));
   api.focus_retrieved(env, thiz);
+  boot_checkpoint("checkpoint: initial game lifecycle complete");
 
   InputState input;
   input_init(&input);
@@ -1206,6 +1256,8 @@ int main(int argc, char **argv) {
   int resuming = 1;
   AppletFocusState previous_focus = appletGetFocusState();
 
+  boot_checkpoint("checkpoint: entering game loop");
+  unsigned frame_count = 0;
   while (appletMainLoop() && !jni_quit_requested) {
     const AppletFocusState focus = appletGetFocusState();
     if (focus != previous_focus) {
@@ -1230,13 +1282,23 @@ int main(int argc, char **argv) {
     }
 
     input_update(&input, &api, env, thiz);
+    if (frame_count == 0) boot_checkpoint("checkpoint: frame 1 input update complete");
     jni_process_soft_keyboard();
     jni_process_deferred_callbacks();
     process_offline_time_sync();
+    if (frame_count == 0) boot_checkpoint("checkpoint: frame 1 JNI/time callbacks complete");
     const jboolean keep_running = api.step(env, thiz);
+    if (frame_count == 0) boot_checkpoint("checkpoint: frame 1 game step returned");
     if (resuming) resuming = api.resume_step(env, thiz) != 0;
+    if (frame_count == 0) boot_checkpoint("checkpoint: frame 1 resume step returned");
     cursor_renderer_draw(&cursor, &input);
-    if (!eglSwapBuffers(graphics.display, graphics.surface)) break;
+    if (frame_count == 0) boot_checkpoint("checkpoint: frame 1 cursor render returned");
+    const EGLBoolean swapped = eglSwapBuffers(graphics.display, graphics.surface);
+    frame_count++;
+    if (frame_count == 1) boot_checkpoint(swapped ? "checkpoint: first EGL swap returned true" : "checkpoint: first EGL swap returned false");
+    else if (frame_count == 2) boot_checkpoint("checkpoint: second frame completed");
+    else if (frame_count == 60) boot_checkpoint("checkpoint: 60 frames completed");
+    if (!swapped) break;
     if (!keep_running || api.game_requested_quit(env, thiz) ||
         api.game_requested_restart(env, thiz))
       break;
