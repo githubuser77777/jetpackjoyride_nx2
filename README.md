@@ -4,7 +4,7 @@
 
 </div>
 
-<h1 align="center">Jetpack Joyride for Nintendo Switch</h1>
+<h1 align="center">Jetpack Joyride for Nintendo Switch 2</h1>
 
 An unofficial homebrew wrapper for the Android ARM64 release of **Jetpack
 Joyride 1.104.1**. It loads the game's native ARM64 library and provides the
