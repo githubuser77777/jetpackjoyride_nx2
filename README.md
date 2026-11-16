@@ -11,7 +11,7 @@ Joyride 1.104.1**. It loads the game's native ARM64 library and provides the
 Android, JNI, input, graphics, and audio services that it needs on Nintendo
 Switch and Switch 2.
 
-**Port version:** 1.0.2<br>
+**Port version:** 1.0.0<br>
 **Targets:** Nintendo Switch and Switch 2. Online services are not available;
 progress and supported features are stored locally.
 
