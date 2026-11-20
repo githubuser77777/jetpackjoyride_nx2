@@ -15,13 +15,6 @@
 static int status_active;
 static int status_retired;
 
-void boot_checkpoint(const char *message) {
-  FILE *log = fopen("sdmc:/switch/jetpackjoyride_nx/boot.log", "a");
-  if (!log) return;
-  fprintf(log, "%s\n", message);
-  fclose(log);
-}
-
 void startup_status_update(const char *message) {
   if (!status_active) return;
   printf("\x1b[2J\x1b[H\n\n  Jetpack Joyride NX\n\n  %s\n\n  Please wait...", message);
