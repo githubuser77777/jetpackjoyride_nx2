@@ -4,26 +4,34 @@ ifeq ($(strip $(DEVKITPRO)),)
 $(error "Set DEVKITPRO in your environment. (export DEVKITPRO=/opt/devkitpro)")
 endif
 TOPDIR ?= $(CURDIR)
+ifeq ($(SWITCH2),1)
+include $(DEVKITPRO)/libounce/switch2_rules
+else
 include $(DEVKITPRO)/libnx/switch_rules
+endif
 
 TARGET    := jetpackjoyride_nx
 APP_TITLE := Jetpack Joyride
 APP_AUTHOR := naga
-APP_VERSION := 1.0.0
+APP_VERSION := 1.0.1
 APP_ICON  := $(TOPDIR)/icon.jpg
 export APP_TITLE APP_AUTHOR APP_VERSION APP_ICON
 BUILD     := build
 SOURCES   := source
 INCLUDES  := source
 
+ifeq ($(SWITCH2),1)
+ARCH    := $(SWITCH2_CPU) -mtp=soft -fPIC -ftls-model=local-exec
+else
 ARCH    := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+endif
 
 CFLAGS  := -Wall -O2 -DNDEBUG -ffunction-sections $(ARCH) $(DEFINES) \
            $(INCLUDE) -D__SWITCH__
 CFLAGS  += -DLOAD_ADDRESS=0xC0000000
 CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
 ASFLAGS := $(ARCH)
-LDFLAGS  = -specs=$(DEVKITPRO)/libnx/switch.specs $(ARCH) -Wl,--gc-sections
+LDFLAGS  = -specs=$(LIBNX)/switch.specs $(ARCH) -Wl,--gc-sections
 
 # Let the installed Mesa/SDL packages supply their static dependencies.
 # Recent Mesa builds also require Vulkan, zstd and Expat; keep archive
@@ -32,8 +40,11 @@ PKG_CONFIG := aarch64-none-elf-pkg-config
 # Publish all EGL presentation paths, including guest import tables.
 LDFLAGS += -Wl,--wrap=eglSwapBuffers,--wrap=eglGetProcAddress,--wrap=__libnx_exit
 
+ifeq ($(SWITCH2),1)
+SWITCH2_GLES_LIBS := -louncevk-gl
+endif
 LIBS := -Wl,--start-group $(shell $(PKG_CONFIG) --libs sdl2 glesv2 egl) \
-        -ldrm_nouveau -lz -lnx -lm -Wl,--end-group
+        $(SWITCH2_GLES_LIBS) -ldrm_nouveau -lz -lnx -lm -Wl,--end-group
 
 LIBDIRS := $(PORTLIBS) $(LIBNX)
 
@@ -47,8 +58,13 @@ CFILES   := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES   := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 
+ifeq ($(SWITCH2),1)
+SWITCH2_OBJECTS := $(PORTLIBS_SWITCH2)/lib/kaihen-jit.o
+endif
+
 export LD := $(CXX)
-export OFILES := $(SFILES:.s=.o) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o)
+export OFILES := $(SFILES:.s=.o) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) \
+                 $(SWITCH2_OBJECTS)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
                   -I$(PORTLIBS)/include/SDL2 -I$(CURDIR)/$(BUILD)

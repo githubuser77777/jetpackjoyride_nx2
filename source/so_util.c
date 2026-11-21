@@ -40,7 +40,6 @@ static so_module *so_list = NULL;
 extern Result __nx_jit_map_code(void *rx_addr, void *src_addr, size_t size);
 
 static Result so_map_image_switch2(so_module *mod, const uint8_t *is_x_page) {
-  boot_checkpoint("checkpoint: S2 image mapping started");
   const size_t pages = mod->load_size / 0x1000;
   for (size_t pg = 0; pg < pages; ) {
     const uint8_t executable = is_x_page[pg];
@@ -57,11 +56,6 @@ static Result so_map_image_switch2(so_module *mod, const uint8_t *is_x_page) {
              dst, src, size, rc);
       return rc;
     }
-    char checkpoint[128];
-    snprintf(checkpoint, sizeof checkpoint,
-             "checkpoint: S2 %s map complete (%p, 0x%zx)",
-             executable ? "RX" : "RW", dst, size);
-    boot_checkpoint(checkpoint);
     pg = end;
   }
   return 0;

@@ -2,6 +2,8 @@
 
 ## 1.0.1
 
+- Remove per-checkpoint boot logging from startup and the initial game frames.
+- Select the Switch 2 toolchain, GLES backend, and kaiHEN JIT mapper when building with `SWITCH2=1`.
 - Integrate PR #1's default controller mode, ZL mouse toggle, stick menu navigation, Minus start touch, and offline console-clock synchronization.
 - Release virtual directions and neutralize analog axes when changing input modes; preserve overlapping physical D-pad holds.
 - Normalize touchscreen input independently of the configured rendering resolution.
